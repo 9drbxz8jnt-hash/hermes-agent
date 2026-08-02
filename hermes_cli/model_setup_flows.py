@@ -2686,6 +2686,76 @@ def _select_zai_endpoint(current_base: str) -> str:
     return options[selected][1].rstrip("/")
 
 
+def _model_flow_plugin_provider(config, provider_id, current_model=""):
+    """Generic flow for native runtime-plugin providers.
+
+    The plugin owns credential storage and client construction, so there is
+    no API-key prompt and no base-URL prompt: the declarative profile
+    supplies the model list and defaults, and the plugin's offline
+    credential probe gates on missing credentials.
+    """
+    from hermes_cli.auth import (
+        _prompt_model_selection,
+        _save_model_choice,
+        deactivate_provider,
+    )
+    from hermes_cli.config import clear_model_endpoint_credentials, load_config, save_config
+    from providers import get_provider_profile, get_provider_runtime
+
+    profile = get_provider_profile(provider_id)
+    runtime = get_provider_runtime(provider_id)
+    display = (
+        getattr(profile, "display_name", "") or provider_id
+        if profile is not None
+        else provider_id
+    )
+    if profile is None or runtime is None:
+        print(f"Provider '{provider_id}' is unavailable (plugin not loaded). No change.")
+        return
+
+    check = getattr(runtime, "check_credentials", None)
+    if callable(check):
+        try:
+            has_creds = bool(check())
+        except Exception:
+            has_creds = False
+        if not has_creds:
+            print(f"  ⚠️  {display}: no credentials found.")
+            print("  Complete the provider's own login first, then re-run `hermes model`.")
+            print("No change.")
+            return
+
+    model_list = [
+        m for m in (profile.fallback_models or ())
+        if isinstance(m, str) and m.strip()
+    ]
+    if not model_list:
+        print(f"  {display}: the plugin declares no models. No change.")
+        return
+
+    selected = _prompt_model_selection(
+        model_list,
+        current_model=current_model,
+    )
+    if not selected:
+        print("No change.")
+        return
+
+    _save_model_choice(selected)
+    cfg = load_config()
+    model = cfg.get("model")
+    if not isinstance(model, dict):
+        model = {"default": model} if model else {}
+        cfg["model"] = model
+    model["provider"] = provider_id
+    model["base_url"] = profile.base_url or ""
+    clear_model_endpoint_credentials(model, clear_api_mode=False)
+    model.pop("api_mode", None)
+    save_config(cfg)
+    deactivate_provider()
+    print(f"Default model set to: {selected} (via {display})")
+
+
 def _model_flow_api_key_provider(config, provider_id, current_model=""):
     """Generic flow for API-key providers (z.ai, MiniMax, OpenCode, etc.)."""
     from hermes_cli.main import _prompt_api_key

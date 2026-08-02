@@ -801,6 +801,7 @@ from hermes_cli.model_setup_flows import (
     _model_flow_anthropic,
     _model_flow_moa,
     _model_flow_ai_gateway,
+    _model_flow_plugin_provider,
 )
 logger = logging.getLogger(__name__)
 
@@ -3045,6 +3046,16 @@ def _is_profile_api_key_provider(provider_id: str) -> bool:
         return False
 
 
+def _is_runtime_plugin_provider(provider_id: str) -> bool:
+    """Return True when provider_id has a registered runtime-plugin profile."""
+    try:
+        from providers import get_provider_runtime
+
+        return get_provider_runtime(provider_id) is not None
+    except Exception:
+        return False
+
+
 def select_provider_and_model(args=None):
     """Core provider selection + model picking logic.
 
@@ -3351,6 +3362,23 @@ def select_provider_and_model(args=None):
         else:
             ordered.append((key, label, members))
 
+    # Native model-provider plugins — same enumeration the gateway/TUI
+    # pickers use (model_switch section 2c): only rows whose OFFLINE
+    # credential probe passes get a leaf row here.
+    from hermes_cli.model_switch import plugin_provider_rows as _plugin_rows
+
+    for _prow in _plugin_rows(
+        current_provider=active,
+        excluded_providers=_cli_excluded or None,
+    ):
+        _pslug = _prow["slug"]
+        _plabel = _prow["name"]
+        if active and _pslug == active:
+            ordered.append((_pslug, f"{_plabel}  ← currently active", []))
+            default_idx = len(ordered) - 1
+        else:
+            ordered.append((_pslug, _plabel, []))
+
     for key, provider_info in _custom_provider_map.items():
         name = provider_info["name"]
         base_url = provider_info["base_url"]
@@ -3460,6 +3488,8 @@ def select_provider_and_model(args=None):
         _model_flow_vertex(config, current_model)
     elif selected_provider == "azure-foundry":
         _model_flow_azure_foundry(config, current_model)
+    elif _is_runtime_plugin_provider(selected_provider):
+        _model_flow_plugin_provider(config, selected_provider, current_model)
     elif selected_provider in {
         "openai-api",
         "gemini",

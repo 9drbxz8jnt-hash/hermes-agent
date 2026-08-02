@@ -1940,6 +1940,66 @@ def prewarm_picker_cache_async() -> Optional["_threading.Thread"]:
     return t
 
 
+def plugin_provider_rows(
+    *,
+    current_provider: str = "",
+    max_models: int | None = None,
+    seen_slugs: set | None = None,
+    excluded_providers: set | None = None,
+) -> List[dict]:
+    """Rows for enabled native model-provider plugins.
+
+    An installed+enabled plugin is itself the user's explicit choice, so a
+    row appears whenever the plugin's cheap OFFLINE credential probe passes —
+    no live /models probe; the model list is the declarative profile's
+    fallback_models. Plugins without a probe (or with failing credentials)
+    stay hidden rather than offering a selection that can only fail.
+    """
+    rows: List[dict] = []
+    try:
+        from providers import get_provider_runtime as _plugin_runtime
+        from providers import list_providers as _plugin_profiles
+    except Exception:
+        return rows
+
+    for _prof in _plugin_profiles():
+        _slug = str(getattr(_prof, "name", "") or "").strip()
+        if not _slug:
+            continue
+        if (seen_slugs is not None and _slug.lower() in seen_slugs) or (
+            excluded_providers is not None and _slug.lower() in excluded_providers
+        ):
+            continue
+        _rt = _plugin_runtime(_slug)
+        _check = getattr(_rt, "check_credentials", None) if _rt is not None else None
+        if not callable(_check):
+            continue
+        try:
+            if not _check():
+                continue
+        except Exception:
+            continue
+        _ids = [
+            m for m in (getattr(_prof, "fallback_models", ()) or ())
+            if isinstance(m, str) and m.strip()
+        ]
+        if not _ids:
+            continue
+        rows.append({
+            "slug": _slug,
+            "name": getattr(_prof, "display_name", "") or get_label(_slug),
+            "is_current": _slug == current_provider,
+            "is_user_defined": False,
+            "models": _ids[:max_models] if max_models is not None else _ids,
+            "total_models": len(_ids),
+            "source": "plugin",
+            "auth_type": getattr(_prof, "auth_type", "") or "",
+        })
+        if seen_slugs is not None:
+            seen_slugs.add(_slug.lower())
+    return rows
+
+
 def list_authenticated_providers(
     current_provider: str = "",
     current_base_url: str = "",
@@ -2544,44 +2604,13 @@ def list_authenticated_providers(
     # profile's fallback_models. Plugins without a probe (or with failing
     # credentials) stay hidden rather than offering a selection that can only
     # fail.
-    try:
-        from providers import get_provider_runtime as _plugin_runtime
-        from providers import list_providers as _plugin_profiles
-
-        for _prof in _plugin_profiles():
-            _slug = str(getattr(_prof, "name", "") or "").strip()
-            if not _slug:
-                continue
-            if _slug.lower() in seen_slugs or _slug.lower() in _excluded:
-                continue
-            _rt = _plugin_runtime(_slug)
-            _check = getattr(_rt, "check_credentials", None) if _rt is not None else None
-            if not callable(_check):
-                continue
-            try:
-                if not _check():
-                    continue
-            except Exception:
-                continue
-            _ids = [
-                m for m in (getattr(_prof, "fallback_models", ()) or ())
-                if isinstance(m, str) and m.strip()
-            ]
-            if not _ids:
-                continue
-            results.append({
-                "slug": _slug,
-                "name": getattr(_prof, "display_name", "") or get_label(_slug),
-                "is_current": _slug == current_provider,
-                "is_user_defined": False,
-                "models": _ids[:max_models] if max_models is not None else _ids,
-                "total_models": len(_ids),
-                "source": "plugin",
-                "auth_type": getattr(_prof, "auth_type", "") or "",
-            })
-            seen_slugs.add(_slug.lower())
-    except Exception:
-        logger.debug("plugin provider rows skipped", exc_info=True)
+    for _prow in plugin_provider_rows(
+        current_provider=current_provider,
+        max_models=max_models,
+        seen_slugs=seen_slugs,
+        excluded_providers=_excluded,
+    ):
+        results.append(_prow)
 
     # --- 3. User-defined endpoints from config ---
     # Track (name, base_url) of what section 3 emits so section 4 can skip

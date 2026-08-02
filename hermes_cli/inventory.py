@@ -593,6 +593,11 @@ def _filter_explicit_provider_rows(rows: list[dict], ctx: ConfigContext) -> list
         slug = str(row.get("slug", "")).strip().lower()
         if not slug:
             continue
+        if row.get("source") == "plugin":
+            # An installed+enabled plugin is itself explicit configuration;
+            # its rows must not be pruned by the ambient-credentials filter.
+            kept.append(row)
+            continue
         if row.get("is_user_defined"):
             kept.append(row)
             continue
