@@ -944,4 +944,25 @@ def resolve_provider_full(
     except Exception:
         pass
 
+    # 4. Native runtime-plugin providers (providers registry).
+    #    An installed+enabled plugin is itself explicit configuration; the
+    #    plugin owns credentials and client construction, so the ProviderDef
+    #    carries no env vars and only the declarative base URL.
+    try:
+        from providers import get_provider_profile as _plugin_profile
+
+        _profile = _plugin_profile(raw) or _plugin_profile(canonical)
+        if _profile is not None:
+            return ProviderDef(
+                id=_profile.name,
+                name=getattr(_profile, "display_name", "") or _profile.name,
+                transport="openai_chat",
+                api_key_env_vars=(),
+                base_url=getattr(_profile, "base_url", "") or "",
+                auth_type=getattr(_profile, "auth_type", "") or "api_key",
+                source="plugin",
+            )
+    except Exception:
+        pass
+
     return None

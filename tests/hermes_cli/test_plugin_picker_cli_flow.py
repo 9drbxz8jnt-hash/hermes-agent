@@ -149,3 +149,35 @@ def test_runtime_plugin_dispatch_predicate(monkeypatch):
     )
     assert main_mod._is_runtime_plugin_provider("plugin-cli-test") is True
     assert main_mod._is_runtime_plugin_provider("openai") is False
+
+
+def test_resolve_provider_full_falls_back_to_plugin_profile(monkeypatch):
+    from hermes_cli.providers import resolve_provider_full
+
+    profile = _profile()
+    monkeypatch.setattr(providers, "get_provider_profile", lambda name: profile)
+    monkeypatch.setattr(providers, "list_providers", lambda: [profile])
+
+    pdef = resolve_provider_full("plugin-cli-test")
+    assert pdef is not None
+    assert pdef.id == "plugin-cli-test"
+    assert pdef.name == "Plugin CLI Test"
+    assert pdef.base_url == "https://example.invalid/v1"
+    assert pdef.auth_type == "oauth_external"
+    assert pdef.source == "plugin"
+    assert pdef.api_key_env_vars == ()
+
+    # Alias lookups resolve to the canonical profile name.
+    monkeypatch.setattr(
+        providers, "get_provider_profile", lambda name: profile if name == "plugin-cli-test" else None
+    )
+    pdef_alias = resolve_provider_full("plugin-cli-test")
+    assert pdef_alias is not None and pdef_alias.id == "plugin-cli-test"
+
+
+def test_resolve_provider_full_no_plugin_returns_none(monkeypatch):
+    from hermes_cli.providers import resolve_provider_full
+
+    monkeypatch.setattr(providers, "get_provider_profile", lambda name: None)
+    monkeypatch.setattr(providers, "list_providers", lambda: [])
+    assert resolve_provider_full("definitely-not-a-provider-xyz") is None
