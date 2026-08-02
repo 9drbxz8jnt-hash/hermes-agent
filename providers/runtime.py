@@ -87,6 +87,9 @@ class ProviderRuntimeHooks:
     api_version: int = RUNTIME_PROVIDER_API_VERSION
     resolve_credentials: Callable[[RuntimeCredentialRequest], RuntimeResolution] | None = None
     create_client: Callable[[RuntimeClientRequest], Any] | None = None
+    # Cheap, offline credential-presence probe for picker/inventory surfaces.
+    # Must never perform network I/O, OAuth refreshes, or credential writes.
+    check_credentials: Callable[[], bool] | None = None
 
 
 def validate_runtime_hooks(runtime: ProviderRuntimeHooks) -> None:
@@ -100,7 +103,7 @@ def validate_runtime_hooks(runtime: ProviderRuntimeHooks) -> None:
         )
     if runtime.resolve_credentials is None and runtime.create_client is None:
         raise ValueError("runtime provider hooks must expose at least one capability")
-    for name in ("resolve_credentials", "create_client"):
+    for name in ("resolve_credentials", "create_client", "check_credentials"):
         hook = getattr(runtime, name)
         if hook is not None and not callable(hook):
             raise TypeError(f"runtime provider hook {name} must be callable")

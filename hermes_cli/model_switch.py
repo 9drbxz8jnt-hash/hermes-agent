@@ -2536,6 +2536,53 @@ def list_authenticated_providers(
         seen_slugs.add(_cp.slug.lower())
         _record_builtin_endpoint(_cp.slug)
 
+    # --- 2c. Native model-provider plugins ---
+    # Profiles registered by enabled plugins (the providers registry). An
+    # installed+enabled plugin is itself the user's explicit choice, so the
+    # row appears whenever the plugin's cheap OFFLINE credential probe passes
+    # — no live /models probe here; the model list is the declarative
+    # profile's fallback_models. Plugins without a probe (or with failing
+    # credentials) stay hidden rather than offering a selection that can only
+    # fail.
+    try:
+        from providers import get_provider_runtime as _plugin_runtime
+        from providers import list_providers as _plugin_profiles
+
+        for _prof in _plugin_profiles():
+            _slug = str(getattr(_prof, "name", "") or "").strip()
+            if not _slug:
+                continue
+            if _slug.lower() in seen_slugs or _slug.lower() in _excluded:
+                continue
+            _rt = _plugin_runtime(_slug)
+            _check = getattr(_rt, "check_credentials", None) if _rt is not None else None
+            if not callable(_check):
+                continue
+            try:
+                if not _check():
+                    continue
+            except Exception:
+                continue
+            _ids = [
+                m for m in (getattr(_prof, "fallback_models", ()) or ())
+                if isinstance(m, str) and m.strip()
+            ]
+            if not _ids:
+                continue
+            results.append({
+                "slug": _slug,
+                "name": getattr(_prof, "display_name", "") or get_label(_slug),
+                "is_current": _slug == current_provider,
+                "is_user_defined": False,
+                "models": _ids[:max_models] if max_models is not None else _ids,
+                "total_models": len(_ids),
+                "source": "plugin",
+                "auth_type": getattr(_prof, "auth_type", "") or "",
+            })
+            seen_slugs.add(_slug.lower())
+    except Exception:
+        logger.debug("plugin provider rows skipped", exc_info=True)
+
     # --- 3. User-defined endpoints from config ---
     # Track (name, base_url) of what section 3 emits so section 4 can skip
     # any overlapping ``custom_providers:`` entries.  Callers typically pass
