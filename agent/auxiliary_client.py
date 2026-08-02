@@ -5780,6 +5780,73 @@ def resolve_provider_client(
     if not model and provider != "auto" and not _nous_portal_vision:
         model = _get_aux_model_for_provider(provider) or _read_main_model_for_aux() or model
 
+    # ── Native runtime-plugin providers (generic seam) ───────────────
+    # A third-party provider that registered ProviderRuntimeHooks owns its
+    # credential resolution and client construction. Built-in providers never
+    # register runtime hooks, so this branch is inert for them. The factory
+    # receives async_mode and returns the correct sync/async facade itself —
+    # plugin clients must NOT pass through _to_async_client/OpenAI wrapping.
+    try:
+        from providers import get_provider_runtime as _get_plugin_runtime
+
+        _plugin_runtime = _get_plugin_runtime(provider)
+    except Exception:
+        _plugin_runtime = None
+    if _plugin_runtime is not None and _plugin_runtime.create_client is not None:
+        from hermes_cli.runtime_provider import resolve_runtime_provider
+
+        try:
+            _plugin_creds = resolve_runtime_provider(
+                requested=provider,
+                explicit_api_key=explicit_api_key,
+                explicit_base_url=explicit_base_url,
+                target_model=model,
+                purpose="auxiliary",
+            )
+        except Exception as exc:
+            # Plugin errors are pre-sanitized upstream, but log the type name
+            # only — never exc_info or plugin-controlled message text.
+            logger.warning(
+                "resolve_provider_client: %s requested but its plugin "
+                "credential resolver failed (%s)",
+                provider,
+                type(exc).__name__,
+            )
+            return None, None
+        try:
+            from providers import create_provider_client as _create_plugin_client
+            from providers.runtime import RuntimeClientRequest
+
+            client = _create_plugin_client(
+                provider,
+                RuntimeClientRequest(
+                    provider=provider,
+                    model=model,
+                    api_mode=str(_plugin_creds.get("api_mode") or ""),
+                    client_kwargs={
+                        "api_key": _plugin_creds.get("api_key", ""),
+                        "base_url": _plugin_creds.get("base_url", ""),
+                    },
+                    async_mode=async_mode,
+                    purpose="auxiliary",
+                    reason="auxiliary",
+                    shared=False,
+                ),
+            )
+        except Exception as exc:
+            logger.warning(
+                "resolve_provider_client: %s plugin client factory failed (%s)",
+                provider,
+                type(exc).__name__,
+            )
+            return None, None
+        if client is None:
+            return None, None
+        final_model = (
+            _normalize_resolved_model(model, provider) if model else model
+        )
+        return client, final_model
+
     def _needs_codex_wrap(client_obj, base_url_str: str, model_str: str) -> bool:
         """Decide if a plain OpenAI client should be wrapped for Responses API.
 

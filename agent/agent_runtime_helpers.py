@@ -2255,6 +2255,41 @@ def create_openai_client(agent, client_kwargs: dict, *, reason: str, shared: boo
     httpx_verify = resolve_httpx_verify(ca_bundle=ssl_ca_cert, ssl_verify=ssl_verify_cfg)
     _validate_proxy_env_urls()
     _validate_base_url(client_kwargs.get("base_url"))
+    # A native model-provider plugin may own client construction (custom
+    # transport/facade). This is the generic seam replacing per-provider
+    # hardcoded branches for third-party runtimes.
+    from providers import create_provider_client
+    from providers.runtime import RuntimeClientRequest
+
+    provider_name = str(getattr(agent, "provider", "") or "")
+    try:
+        plugin_client = create_provider_client(
+            provider_name,
+            RuntimeClientRequest(
+                provider=provider_name,
+                model=str(getattr(agent, "model", "") or ""),
+                api_mode=str(getattr(agent, "api_mode", "") or ""),
+                client_kwargs=client_kwargs,
+                async_mode=False,
+                purpose="primary",
+                reason=reason,
+                shared=shared,
+            ),
+        )
+    except Exception:
+        # Controlled failure, same shape as other provider init failures:
+        # sanitized message, no plugin exception text, no chained traceback.
+        raise RuntimeError(
+            f"Provider plugin client unavailable for {provider_name!r}"
+        ) from None
+    if plugin_client is not None:
+        _ra().logger.info(
+            "Provider plugin client created (%s, shared=%s) %s",
+            reason,
+            shared,
+            agent._client_log_context(),
+        )
+        return plugin_client
     if agent.provider == "copilot-acp" or str(client_kwargs.get("base_url", "")).startswith("acp://copilot"):
         from agent.copilot_acp_client import CopilotACPClient
 

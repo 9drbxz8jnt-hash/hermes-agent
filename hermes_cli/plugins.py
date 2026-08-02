@@ -277,6 +277,22 @@ def _get_enabled_plugins() -> Optional[set]:
 _VALID_PLUGIN_KINDS: Set[str] = {"standalone", "backend", "exclusive", "platform", "model-provider"}
 
 
+def _validate_model_provider_capability(value: Any) -> List[str]:
+    """Coerce a manifest ``provides_model_providers`` value to provider names.
+
+    Anything that is not a list of non-empty strings is treated as "declares
+    nothing" — a malformed or falsely-typed capability must never smuggle a
+    plugin into the provider-resolution import path.
+    """
+    if not isinstance(value, list):
+        return []
+    result: List[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            result.append(item.strip())
+    return result
+
+
 @dataclass
 class PluginManifest:
     """Parsed representation of a plugin.yaml manifest."""
@@ -288,6 +304,7 @@ class PluginManifest:
     requires_env: List[Union[str, Dict[str, Any]]] = field(default_factory=list)
     provides_tools: List[str] = field(default_factory=list)
     provides_hooks: List[str] = field(default_factory=list)
+    provides_model_providers: List[str] = field(default_factory=list)
     source: str = ""        # "user", "project", or "entrypoint"
     path: Optional[str] = None
     # Plugin kind — see plugins.py module docstring for semantics.
@@ -660,6 +677,37 @@ class PluginContext:
         logger.info(
             "Plugin '%s' registered context engine: %s",
             self.manifest.name, engine.name,
+        )
+
+    # -- model provider registration ----------------------------------------
+
+    def register_model_provider(self, profile, *, runtime=None) -> None:
+        """Register a model-provider profile and optional native runtime hooks.
+
+        This lets an enabled general plugin expose a model provider alongside
+        other backend capabilities without reaching into the provider registry
+        directly.  Provider discovery invokes the general plugin manager as
+        part of its lazy sweep, so the profile is available to every runtime
+        resolution path.
+        """
+        from providers import register_provider
+        from providers.base import ProviderProfile
+
+        if not isinstance(profile, ProviderProfile):
+            raise TypeError(
+                "model provider plugins must register a ProviderProfile instance"
+            )
+        declared = {item.lower() for item in self.manifest.provides_model_providers}
+        claimed = {profile.name.lower()} | {a.lower() for a in profile.aliases}
+        if not claimed <= declared:
+            raise ValueError(
+                "model provider plugins must declare every registered provider "
+                "name and alias in the manifest 'provides_model_providers' list"
+            )
+        register_provider(profile, runtime=runtime)
+        logger.info(
+            "Plugin '%s' registered model provider: %s",
+            self.manifest.name, profile.name,
         )
 
     # -- image gen provider registration ------------------------------------
@@ -1277,6 +1325,8 @@ class PluginManager:
         self._context_engine = None  # Set by a plugin via register_context_engine()
         self._plugin_commands: Dict[str, dict] = {}  # Slash commands registered by plugins
         self._discovered: bool = False
+        self._model_provider_plugins_discovered: bool = False
+        self._model_provider_targets_loaded: set[str] = set()
         self._cli_ref = None  # Set by CLI after plugin discovery
         # Plugin skill registry: qualified name → metadata dict.
         self._plugin_skills: Dict[str, Dict[str, Any]] = {}
@@ -1320,6 +1370,7 @@ class PluginManager:
             self._aux_tasks.clear()
             self._slack_action_handlers.clear()
             self._context_engine = None
+            self._model_provider_plugins_discovered = False
         # Set the flag up front as a re-entrancy guard (a plugin's register()
         # can transitively trigger discovery again), but reset it if the sweep
         # raises so a failed scan is NOT cached as "discovered with an empty
@@ -1333,7 +1384,57 @@ class PluginManager:
             self._discovered = False
             raise
 
-    def _discover_and_load_inner(self) -> None:
+    def discover_model_provider_plugins(self, for_provider: str | None = None) -> None:
+        """Load enabled general plugins that declare model providers.
+
+        Provider resolution can occur while other startup subsystems (notably
+        auth) are still importing. Loading every general plugin here creates
+        unrelated import cycles, so this narrow discovery path imports only
+        manifests that explicitly declare ``provides_model_providers``.
+
+        ``for_provider`` narrows it further to plugins whose validated
+        declaration contains that exact provider name or alias — resolving
+        provider X never imports a plugin that only declares provider Y.
+        A full sweep (``for_provider=None``) is reserved for listing flows
+        that genuinely need every provider.
+        """
+        if env_var_enabled("HERMES_SAFE_MODE"):
+            logger.info("HERMES_SAFE_MODE=1 — model-provider plugin discovery skipped")
+            if for_provider is None:
+                self._model_provider_plugins_discovered = True
+            return
+
+        if for_provider is None:
+            if self._model_provider_plugins_discovered:
+                return
+            self._model_provider_plugins_discovered = True
+            try:
+                self._discover_and_load_inner(model_provider_only=True)
+            except BaseException:
+                self._model_provider_plugins_discovered = False
+                raise
+            return
+
+        target = for_provider.strip().lower()
+        if not target:
+            return
+        if self._model_provider_plugins_discovered:
+            return  # full sweep already loaded everything
+        if target in self._model_provider_targets_loaded:
+            return
+        self._model_provider_targets_loaded.add(target)
+        try:
+            self._discover_and_load_inner(model_provider_only=True, for_provider=target)
+        except BaseException:
+            self._model_provider_targets_loaded.discard(target)
+            raise
+
+    def _discover_and_load_inner(
+        self,
+        *,
+        model_provider_only: bool = False,
+        for_provider: str | None = None,
+    ) -> None:
         """The actual discovery sweep — see :meth:`discover_and_load`."""
         manifests: List[PluginManifest] = []
 
@@ -1403,6 +1504,55 @@ class PluginManager:
             winners[manifest.key or manifest.name] = manifest
         for manifest in winners.values():
             lookup_key = manifest.key or manifest.name
+
+            # A narrow provider-discovery sweep may have already loaded this
+            # root plugin. The normal sweep must not call register() twice.
+            if lookup_key in self._plugins:
+                continue
+
+            if model_provider_only:
+                if not manifest.provides_model_providers:
+                    continue
+                if (
+                    for_provider is not None
+                    and for_provider
+                    not in {item.lower() for item in manifest.provides_model_providers}
+                ):
+                    # Targeted load: this plugin does not declare the provider
+                    # being resolved — do not import it.
+                    continue
+                if manifest.kind not in {"backend", "standalone"}:
+                    loaded = LoadedPlugin(manifest=manifest, enabled=False)
+                    loaded.error = (
+                        "model-provider capability requires kind 'backend' or 'standalone'"
+                    )
+                    self._plugins[lookup_key] = loaded
+                    logger.warning(
+                        "Skipping '%s': %s",
+                        lookup_key, loaded.error,
+                    )
+                    continue
+                if lookup_key in disabled or manifest.name in disabled:
+                    loaded = LoadedPlugin(manifest=manifest, enabled=False)
+                    loaded.error = "disabled via config"
+                    self._plugins[lookup_key] = loaded
+                    continue
+                is_enabled = (
+                    enabled is not None
+                    and (lookup_key in enabled or manifest.name in enabled)
+                )
+                if manifest.source == "bundled" and manifest.kind == "backend":
+                    self._load_plugin(manifest)
+                elif is_enabled:
+                    self._load_plugin(manifest)
+                else:
+                    loaded = LoadedPlugin(manifest=manifest, enabled=False)
+                    loaded.error = (
+                        "not enabled in config (run `hermes plugins enable {}` to activate)"
+                        .format(lookup_key)
+                    )
+                    self._plugins[lookup_key] = loaded
+                continue
 
             # Explicit disable always wins (matches on key or on legacy
             # bare name for back-compat with existing user configs).
@@ -1659,6 +1809,9 @@ class PluginManager:
                 requires_env=data.get("requires_env", []),
                 provides_tools=data.get("provides_tools", []),
                 provides_hooks=data.get("provides_hooks", []),
+                provides_model_providers=_validate_model_provider_capability(
+                    data.get("provides_model_providers")
+                ),
                 source=source,
                 path=str(plugin_dir),
                 kind=kind,

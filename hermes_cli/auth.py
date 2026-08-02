@@ -2011,6 +2011,14 @@ def resolve_provider(
         return "custom"
     if normalized in PROVIDER_REGISTRY:
         return normalized
+    try:
+        from providers import get_provider_profile
+
+        plugin_profile = get_provider_profile(normalized)
+        if plugin_profile is not None:
+            return plugin_profile.name
+    except Exception:
+        pass
     if normalized != "auto":
         # Check for common config.yaml issues that cause this error
         _config_hint = _get_config_hint_for_unknown_provider(normalized)

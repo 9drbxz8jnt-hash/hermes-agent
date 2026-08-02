@@ -1647,12 +1647,105 @@ def _resolve_explicit_runtime(
     return None
 
 
+def _resolve_registered_runtime(
+    *,
+    provider: str,
+    requested_provider: str,
+    model_cfg: Dict[str, Any],
+    explicit_api_key: Optional[str],
+    explicit_base_url: Optional[str],
+    target_model: Optional[str],
+    purpose: str,
+) -> Optional[Dict[str, Any]]:
+    """Resolve credentials through a versioned native provider hook."""
+    from providers import get_provider_profile, get_provider_runtime
+    from providers.runtime import RuntimeCredentialRequest, RuntimeResolution
+
+    runtime = get_provider_runtime(provider)
+    resolver = runtime.resolve_credentials if runtime is not None else None
+    if resolver is None:
+        return None
+    if purpose not in {"primary", "auxiliary", "fallback"}:
+        raise ValueError(f"unsupported provider runtime purpose: {purpose!r}")
+
+    request = RuntimeCredentialRequest(
+        provider=provider,
+        requested_provider=requested_provider,
+        explicit_api_key=str(explicit_api_key or ""),
+        explicit_base_url=str(explicit_base_url or ""),
+        target_model=target_model,
+        model_config=model_cfg,
+        purpose=purpose,
+    )
+    try:
+        resolved = resolver(request)
+    except Exception:
+        # Plugin exceptions are untrusted (may embed credentials, even via a
+        # plugin-raised AuthError). Fixed message, no chained cause.
+        raise AuthError(
+            f"Provider {provider!r} credential resolver failed.",
+            provider=provider,
+            code="runtime_plugin_resolver_failed",
+        ) from None
+
+    if not isinstance(resolved, RuntimeResolution):
+        raise AuthError(
+            f"Provider {provider!r} credential resolver returned an invalid result.",
+            provider=provider,
+            code="runtime_plugin_invalid_result",
+        )
+    if resolved.provider != provider:
+        raise AuthError(
+            f"Provider {provider!r} credential resolver returned another provider.",
+            provider=provider,
+            code="runtime_plugin_provider_mismatch",
+        )
+
+    api_key = str(explicit_api_key or resolved.api_key or "").strip()
+    if not api_key:
+        raise AuthError(
+            f"Provider {provider!r} credential resolver returned no API key.",
+            provider=provider,
+            code="runtime_plugin_missing_api_key",
+        )
+    profile = get_provider_profile(provider)
+    base_url = str(
+        explicit_base_url
+        or resolved.base_url
+        or (profile.base_url if profile is not None else "")
+        or ""
+    ).strip().rstrip("/")
+    if not base_url:
+        raise AuthError(
+            f"Provider {provider!r} credential resolver returned no base URL.",
+            provider=provider,
+            code="runtime_plugin_missing_base_url",
+        )
+    api_mode = _parse_api_mode(resolved.api_mode)
+    if not api_mode:
+        raise AuthError(
+            f"Provider {provider!r} credential resolver returned an invalid API mode.",
+            provider=provider,
+            code="runtime_plugin_invalid_api_mode",
+        )
+    source = str(resolved.source or "runtime-plugin").strip() or "runtime-plugin"
+    return {
+        "provider": provider,
+        "api_mode": api_mode,
+        "base_url": base_url,
+        "api_key": api_key,
+        "source": source,
+        "requested_provider": requested_provider,
+    }
+
+
 def resolve_runtime_provider(
     *,
     requested: Optional[str] = None,
     explicit_api_key: Optional[str] = None,
     explicit_base_url: Optional[str] = None,
     target_model: Optional[str] = None,
+    purpose: str = "primary",
 ) -> Dict[str, Any]:
     """Resolve runtime provider credentials for agent execution.
 
@@ -1817,6 +1910,17 @@ def resolve_runtime_provider(
         explicit_base_url=explicit_base_url,
     )
     model_cfg = _get_model_config()
+    registered_runtime = _resolve_registered_runtime(
+        provider=provider,
+        requested_provider=requested_provider,
+        model_cfg=model_cfg,
+        explicit_api_key=explicit_api_key,
+        explicit_base_url=explicit_base_url,
+        target_model=target_model,
+        purpose=purpose,
+    )
+    if registered_runtime is not None:
+        return registered_runtime
     explicit_runtime = _resolve_explicit_runtime(
         provider=provider,
         requested_provider=requested_provider,

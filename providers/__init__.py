@@ -35,14 +35,22 @@ import importlib.util
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 from providers.base import OMIT_TEMPERATURE, ProviderProfile  # noqa: F401
+from providers.runtime import (
+    ProviderRuntimeError,
+    ProviderRuntimeHooks,
+    RuntimeClientRequest,
+    validate_runtime_hooks,
+)
 
 logger = logging.getLogger(__name__)
 
 _REGISTRY: dict[str, ProviderProfile] = {}
 _ALIASES: dict[str, str] = {}
 _PROVIDER_LIST_CACHE: list[ProviderProfile] | None = None
+_RUNTIME_REGISTRY: dict[str, ProviderRuntimeHooks] = {}
 _discovered = False
 
 # Repo-root ``plugins/model-providers/`` — populated at discovery time.
@@ -51,17 +59,36 @@ _BUNDLED_PLUGINS_DIR = (
 )
 
 
-def register_provider(profile: ProviderProfile) -> None:
+def register_provider(
+    profile: ProviderProfile,
+    *,
+    runtime: ProviderRuntimeHooks | None = None,
+) -> None:
     """Register a provider profile by name and aliases.
 
     Later registrations with the same name replace earlier ones — so user
     plugins under ``$HERMES_HOME/plugins/model-providers/`` can override
-    bundled profiles without editing repo code.
+    bundled profiles without editing repo code. A replacement without runtime
+    hooks deliberately clears executable behavior from the previous owner.
     """
     global _PROVIDER_LIST_CACHE
+    if not isinstance(profile, ProviderProfile):
+        raise TypeError("profile must be a providers.base.ProviderProfile")
+    if runtime is not None:
+        validate_runtime_hooks(runtime)
+
+    # Replacement must not leave aliases pointing at a profile that no longer
+    # declares them. Validation happens above, before this state is mutated.
+    for alias, canonical in list(_ALIASES.items()):
+        if canonical == profile.name:
+            _ALIASES.pop(alias)
     _REGISTRY[profile.name] = profile
     for alias in profile.aliases:
         _ALIASES[alias] = profile.name
+    if runtime is None:
+        _RUNTIME_REGISTRY.pop(profile.name, None)
+    else:
+        _RUNTIME_REGISTRY[profile.name] = runtime
     _PROVIDER_LIST_CACHE = None
 
 
@@ -73,7 +100,63 @@ def get_provider_profile(name: str) -> ProviderProfile | None:
     if not _discovered:
         _discover_providers()
     canonical = _ALIASES.get(name, name)
-    return _REGISTRY.get(canonical)
+    profile = _REGISTRY.get(canonical)
+    if profile is None:
+        _load_general_model_provider(name)
+        canonical = _ALIASES.get(name, name)
+        profile = _REGISTRY.get(canonical)
+    return profile
+
+
+def get_provider_runtime(name: str) -> ProviderRuntimeHooks | None:
+    """Return the executable hook bundle for a provider name or alias."""
+    if not _discovered:
+        _discover_providers()
+    canonical = _ALIASES.get(name, name)
+    if canonical not in _RUNTIME_REGISTRY:
+        _load_general_model_provider(name)
+        canonical = _ALIASES.get(name, name)
+    return _RUNTIME_REGISTRY.get(canonical)
+
+
+def _load_general_model_provider(name: str) -> None:
+    """Targeted load: import only enabled general plugins declaring ``name``.
+
+    Runs on a registry miss so resolving provider X never imports a plugin
+    that only declares provider Y. Failures are contained: a broken plugin
+    must not break the caller's provider resolution.
+    """
+    try:
+        from hermes_cli.plugins import get_plugin_manager
+
+        get_plugin_manager().discover_model_provider_plugins(name)
+    except Exception as exc:
+        logger.debug(
+            "Targeted model-provider plugin load for %r failed (%s)",
+            name,
+            type(exc).__name__,
+        )
+
+
+def create_provider_client(
+    name: str,
+    request: RuntimeClientRequest,
+) -> Any | None:
+    """Ask a registered native provider to build a client, if it owns one."""
+    if not isinstance(request, RuntimeClientRequest):
+        raise TypeError("request must be a providers.runtime.RuntimeClientRequest")
+    runtime = get_provider_runtime(name)
+    factory = runtime.create_client if runtime is not None else None
+    if factory is None:
+        return None
+    try:
+        return factory(request)
+    except Exception:
+        # Plugin exceptions are untrusted: their text (and any chained cause)
+        # may embed credentials. Replace wholesale; never `from exc`.
+        raise ProviderRuntimeError(
+            f"Provider {name!r} client factory failed"
+        ) from None
 
 
 def list_providers() -> list[ProviderProfile]:
@@ -81,6 +164,15 @@ def list_providers() -> list[ProviderProfile]:
     global _PROVIDER_LIST_CACHE
     if not _discovered:
         _discover_providers()
+    # Listing genuinely needs every provider: full declaring-plugin sweep.
+    try:
+        from hermes_cli.plugins import get_plugin_manager
+
+        get_plugin_manager().discover_model_provider_plugins()
+    except Exception as exc:
+        logger.debug(
+            "Model-provider plugin sweep failed (%s)", type(exc).__name__
+        )
     if _PROVIDER_LIST_CACHE is not None:
         return list(_PROVIDER_LIST_CACHE)
     # Deduplicate: _REGISTRY has canonical names; _ALIASES points to same objects
@@ -151,6 +243,8 @@ def _discover_providers() -> None:
       1. Bundled plugins at ``<repo>/plugins/model-providers/<name>/``
       2. User plugins at ``$HERMES_HOME/plugins/model-providers/<name>/``
       3. Legacy per-file modules at ``providers/<name>.py`` (back-compat)
+      4. Enabled general plugins that declare ``provides_model_providers``
+         and register a model provider through ``PluginContext``
 
     Each step imports its plugins, which call ``register_provider()`` at
     module-level. Later steps win on name collision.
@@ -196,3 +290,9 @@ def _discover_providers() -> None:
                 )
     except Exception:
         pass
+
+    # 4. General plugins declaring ``provides_model_providers`` are NOT swept
+    #    here. They load either targeted (on a registry miss for the exact
+    #    declared name/alias — see get_provider_profile/get_provider_runtime)
+    #    or in a full sweep from list_providers(). This keeps resolving one
+    #    provider from ever importing a plugin that declares another.
