@@ -1,0 +1,25 @@
+import { describe, expect, it } from 'vitest'
+
+import { resolveTextDirection } from './bidi-direction'
+
+describe('resolveTextDirection', () => {
+  it('ignores leading neutral punctuation before RTL text', () => {
+    expect(resolveTextDirection('- شغّل Hermes')).toBe('rtl')
+    expect(resolveTextDirection('؟ شغّل Hermes')).toBe('rtl')
+    expect(resolveTextDirection('(شغّل Hermes)')).toBe('rtl')
+    expect(resolveTextDirection('2026: شغّل Hermes')).toBe('rtl')
+  })
+
+  it('lets RTL text after leading code-like tokens own the sentence direction', () => {
+    expect(resolveTextDirection('`npm test` شغّل الأول')).toBe('rtl')
+    expect(resolveTextDirection('@file:`apps/desktop/a.ts` شوف الملف')).toBe('rtl')
+    expect(resolveTextDirection('./run.sh شغّل السكريبت')).toBe('rtl')
+    expect(resolveTextDirection('/some-skill شغّل ده')).toBe('rtl')
+  })
+
+  it('falls back to the leading strong LTR text when there is no RTL sentence body', () => {
+    expect(resolveTextDirection('run tests الأول')).toBe('ltr')
+    expect(resolveTextDirection('`npm test`')).toBe('ltr')
+    expect(resolveTextDirection('@file:`apps/desktop/a.ts`')).toBe('ltr')
+  })
+})
