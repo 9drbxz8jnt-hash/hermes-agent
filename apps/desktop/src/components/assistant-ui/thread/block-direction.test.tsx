@@ -1,6 +1,6 @@
 // Lists and blockquotes have chrome beside the text (markers, the quote
 // border) whose side is driven by the box's CSS direction, which the
-// unicode-bidi:plaintext rules never touch. These tests pin the split of
+// unicode-bidi isolation never changes. These tests pin the split of
 // responsibilities: block chrome carries a resolved dir so markers/borders
 // follow Arabic/Hebrew text even when an item starts with an English brand or
 // inline code, inline code carries dir="ltr" so it neither votes in that

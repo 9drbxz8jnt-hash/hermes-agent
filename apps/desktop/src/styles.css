@@ -1262,15 +1262,16 @@ code {
    reads cleaner than a ragged tool-vs-reply column. */
 
 /* RTL/bidi chat text (#44150): React-owned text surfaces set their own
-   direction from the user-visible sentence, while plaintext keeps bidi runs
-   from leaking across paragraphs. This matters when a line starts with neutral
-   punctuation, a chip, or inline code before Arabic/Hebrew text. Covers
-   assistant prose, user lines, and both composers (main + edit share
-   composer-rich-input). */
+   direction from the user-visible sentence, then isolate that resolved block
+   from surrounding bidi runs. `plaintext` is intentionally wrong here: it
+   re-detects the paragraph from the first strong character, so an English
+   brand or neutral punctuation can undo the resolved RTL direction and make
+   wrapped lines align left. Covers assistant prose, user lines, and both
+   composers (main + edit share composer-rich-input). */
 [data-slot='aui_assistant-message-content'] .aui-md :where(p, h1, h2, h3, h4, h5, h6, li, blockquote),
 [data-slot='aui_user-inline-text'],
 [data-slot='composer-rich-input'] {
-  unicode-bidi: plaintext;
+  unicode-bidi: isolate;
   text-align: start;
 }
 
