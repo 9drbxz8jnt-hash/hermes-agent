@@ -26,5 +26,12 @@ describe('resolveTextDirection', () => {
   it('uses the dominant sentence script when an English brand starts Arabic prose', () => {
     expect(resolveTextDirection('Alibaba نزلت Qwen3.8-Max والمقلب الحلو إنك بتكلم الخير ده')).toBe('rtl')
     expect(resolveTextDirection('DeepSeek نزلت V4 beta شغالة على الأسعار الصينية')).toBe('rtl')
+    expect(resolveTextDirection('Moonshot (Kimi) نزلوا K3 وفتحوا الـ infrastructure بتاعهم')).toBe('rtl')
+    expect(resolveTextDirection('Google عندها Gemini 3.5 + Gemini Omni + computer use في Flash')).toBe('rtl')
+  })
+
+  it('keeps leading neutral punctuation outside an English-brand Arabic sentence', () => {
+    expect(resolveTextDirection('• Google عندها Gemini 3.5')).toBe('rtl')
+    expect(resolveTextDirection('— OpenAI لسه مكملة بـ GPT-5.6')).toBe('rtl')
   })
 })

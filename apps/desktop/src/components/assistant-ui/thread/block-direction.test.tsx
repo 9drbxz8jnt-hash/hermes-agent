@@ -137,16 +137,19 @@ describe('block-level direction chrome', () => {
       <Harness
         text={
           '- **Alibaba** نزلت Qwen3.8-Max والمقلب الحلو إنك بتكلم الخبر ده\n' +
-          '- **DeepSeek** نزلت V4 beta شغالة على الأسعار الصينية'
+          '- **DeepSeek** نزلت V4 beta شغالة على الأسعار الصينية\n' +
+          '- **Google عندها Gemini 3.5 + Gemini Omni + computer use في Flash** — بس برضه عندهم نزيف باحثين'
         }
       />
     )
 
     const alibaba = await screen.findByText('Alibaba')
     const deepseek = await screen.findByText('DeepSeek')
+    const google = await screen.findByText(/Google عندها/)
 
     expect(alibaba.closest('ul')?.getAttribute('dir')).toBe('rtl')
     expect(alibaba.closest('li')?.getAttribute('dir')).toBe('rtl')
     expect(deepseek.closest('li')?.getAttribute('dir')).toBe('rtl')
+    expect(google.closest('li')?.getAttribute('dir')).toBe('rtl')
   })
 })

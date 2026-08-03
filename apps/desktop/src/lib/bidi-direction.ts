@@ -1,10 +1,15 @@
 export type TextDirection = 'ltr' | 'rtl'
 
-const RTL_STRONG_RE = /[\p{Script=Adlam}\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Nko}\p{Script=Syriac}\p{Script=Thaana}]/u
+const RTL_STRONG_RE =
+  /[\p{Script=Adlam}\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Nko}\p{Script=Syriac}\p{Script=Thaana}]/u
 const LETTER_RE = /\p{Letter}/u
 
 const LEADING_DIRECTIVE_RE = /^@[\w-]{1,64}:(?:`[^`]*`|"[^"]*"|'[^']*'|[^\s]+)/u
 const LEADING_INLINE_CODE_RE = /^(`+)[\s\S]*?\1/u
+
+const LEADING_LATIN_LABEL_RE =
+  /^(?:[\p{Script=Latin}\p{Number}][\p{Script=Latin}\p{Number}._+:/#@-]*)(?:\s+\([\p{Script=Latin}\p{Number}\s._+:/#@-]+\))?/u
+
 const LEADING_PATH_TOKEN_RE = /^(?:\.{1,2}\/|\/|~\/|[A-Za-z]:[\\/])[^\s]+/u
 const LEADING_SLASH_COMMAND_RE = /^\/[A-Za-z][\w-]*(?=\s|$)/u
 
@@ -61,6 +66,7 @@ function stripLeadingNonStrong(text: string) {
 
 function stripOneLeadingToken(text: string) {
   const trimmed = text.trimStart()
+
   const token =
     trimmed.match(LEADING_INLINE_CODE_RE)?.[0] ??
     trimmed.match(LEADING_DIRECTIVE_RE)?.[0] ??
@@ -86,11 +92,17 @@ function stripLeadingDirectionalTokens(text: string) {
   return next
 }
 
+function startsWithLatinLabelThenRtl(text: string) {
+  const label = text.match(LEADING_LATIN_LABEL_RE)?.[0]
+
+  return label ? firstStrongDirection(text.slice(label.length)) === 'rtl' : false
+}
+
 export function resolveTextDirection(text: string, fallback: TextDirection = 'ltr'): TextDirection {
   const afterSpecialStart = stripLeadingDirectionalTokens(text)
   const afterSpecialDirection = firstStrongDirection(afterSpecialStart)
 
-  if (afterSpecialDirection === 'rtl') {
+  if (afterSpecialDirection === 'rtl' || startsWithLatinLabelThenRtl(afterSpecialStart)) {
     return 'rtl'
   }
 
