@@ -22,4 +22,9 @@ describe('resolveTextDirection', () => {
     expect(resolveTextDirection('`npm test`')).toBe('ltr')
     expect(resolveTextDirection('@file:`apps/desktop/a.ts`')).toBe('ltr')
   })
+
+  it('uses the dominant sentence script when an English brand starts Arabic prose', () => {
+    expect(resolveTextDirection('Alibaba نزلت Qwen3.8-Max والمقلب الحلو إنك بتكلم الخير ده')).toBe('rtl')
+    expect(resolveTextDirection('DeepSeek نزلت V4 beta شغالة على الأسعار الصينية')).toBe('rtl')
+  })
 })

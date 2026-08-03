@@ -22,6 +22,29 @@ function firstStrongDirection(text: string): TextDirection | null {
   return null
 }
 
+function dominantStrongDirection(text: string): TextDirection | null {
+  let ltr = 0
+  let rtl = 0
+
+  for (const ch of text) {
+    if (RTL_STRONG_RE.test(ch)) {
+      rtl += 1
+    } else if (LETTER_RE.test(ch)) {
+      ltr += 1
+    }
+  }
+
+  if (rtl > ltr) {
+    return 'rtl'
+  }
+
+  if (ltr > 0) {
+    return 'ltr'
+  }
+
+  return rtl > 0 ? 'rtl' : null
+}
+
 function stripLeadingNonStrong(text: string) {
   let index = 0
 
@@ -65,8 +88,13 @@ function stripLeadingDirectionalTokens(text: string) {
 
 export function resolveTextDirection(text: string, fallback: TextDirection = 'ltr'): TextDirection {
   const afterSpecialStart = stripLeadingDirectionalTokens(text)
+  const afterSpecialDirection = firstStrongDirection(afterSpecialStart)
 
-  return firstStrongDirection(afterSpecialStart) ?? firstStrongDirection(text) ?? fallback
+  if (afterSpecialDirection === 'rtl') {
+    return 'rtl'
+  }
+
+  return dominantStrongDirection(text) ?? afterSpecialDirection ?? firstStrongDirection(text) ?? fallback
 }
 
 export function syncElementTextDirection(element: HTMLElement, text: string) {
