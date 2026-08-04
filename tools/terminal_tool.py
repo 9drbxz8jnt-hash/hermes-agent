@@ -2544,6 +2544,13 @@ def terminal_tool(
                         metadata = local_path.stat()
                         if stat.S_ISREG(metadata.st_mode) and metadata.st_size <= 1024 * 1024:
                             data = local_path.read_bytes()
+                            # Binary (Mach-O/ELF/PE) — not a shell script; the
+                            # in-guard reader skips NUL-bearing files, so the
+                            # remote fallback must too (#76762 parity), else
+                            # its decoded contents feed garbage paths into the
+                            # recursive scan and crash the guard.
+                            if b"\x00" in data:
+                                return None
                             if len(data) <= 1024 * 1024:
                                 return data.decode("utf-8", errors="replace")
                 except Exception:
@@ -2552,7 +2559,10 @@ def terminal_tool(
                 try:
                     result = env.execute(f"cat {shlex.quote(script_path)}")
                     if result.get("returncode", -1) == 0:
-                        return result.get("output", "")
+                        output = result.get("output", "")
+                        if "\x00" in output:
+                            return None
+                        return output
                 except Exception:
                     pass
                 return None
