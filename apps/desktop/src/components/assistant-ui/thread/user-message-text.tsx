@@ -2,8 +2,8 @@ import type { FC } from 'react'
 import { Fragment, useMemo } from 'react'
 
 import { DirectiveContent } from '@/components/assistant-ui/directive-text'
-import { resolveTextDirection } from '@/lib/bidi-direction'
 import { referenceRe } from '@/components/assistant-ui/reference-kinds'
+import { resolveTextDirection } from '@/lib/bidi-direction'
 import { cn } from '@/lib/utils'
 
 // User messages should render the bare-minimum of markdown: backtick `code`
