@@ -38,6 +38,19 @@ describe('resolveTextDirection', () => {
     expect(resolveTextDirection('Coach hypothesis job failures: مايتجنوش.')).toBe('rtl')
   })
 
+  it('keeps an English sentence containing one Arabic word LTR', () => {
+    expect(resolveTextDirection('Can you explain what مرحبا means?')).toBe('ltr')
+    expect(resolveTextDirection('Please translate this into Arabic مرحبا for me')).toBe('ltr')
+    expect(resolveTextDirection('The error message says مرحبا in the log')).toBe('ltr')
+    expect(resolveTextDirection('Why does مرحبا appear in this test?')).toBe('ltr')
+    expect(resolveTextDirection('I think مرحبا is wrong here')).toBe('ltr')
+    expect(resolveTextDirection('Use مرحبا as the greeting')).toBe('ltr')
+    expect(resolveTextDirection('This is the مرحبا example from the docs')).toBe('ltr')
+    expect(resolveTextDirection('Is مرحبا the right word for hello?')).toBe('ltr')
+    expect(resolveTextDirection('Add a test for the مرحبا case')).toBe('ltr')
+    expect(resolveTextDirection('Run tests الأول')).toBe('ltr')
+  })
+
   it('keeps leading neutral punctuation outside an English-brand Arabic sentence', () => {
     expect(resolveTextDirection('• Google عندها Gemini 3.5')).toBe('rtl')
     expect(resolveTextDirection('— OpenAI لسه مكملة بـ GPT-5.6')).toBe('rtl')

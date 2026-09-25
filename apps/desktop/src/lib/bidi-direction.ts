@@ -12,7 +12,7 @@ const LEADING_INLINE_CODE_RE = /^(`+)[\s\S]*?\1/u
 
 const LEADING_LATIN_LABEL_TOKEN_RE =
   /^(?:[\p{Script=Latin}\p{Number}][\p{Script=Latin}\p{Number}\p{Punctuation}+]*|\([\p{Script=Latin}\p{Number}\p{Punctuation}\s+]+\))(?:\s+|$)/u
-const UPPERCASE_LETTER_RE = /^\p{Uppercase_Letter}/u
+const LOWERCASE_LETTER_RE = /^\p{Lowercase_Letter}/u
 
 const LEADING_PATH_TOKEN_RE = /^(?:\.{1,2}\/|\/|~\/|[A-Za-z]:[\\/])[^\s]+/u
 const LEADING_SLASH_COMMAND_RE = /^\/[A-Za-z][\w-]*(?=\s|$)/u
@@ -96,9 +96,35 @@ function stripLeadingDirectionalTokens(text: string) {
   return next
 }
 
+function isLabelShapedToken(token: string) {
+  const word = token.trim()
+
+  // Technical tokens ("existing:", "Task16", "GPT-5.6") and acronyms ("NOOP")
+  // read as labels; a plain capitalized word does not, because every English
+  // sentence starts with one.
+  return (
+    /[\d\p{Punctuation}]/u.test(word) ||
+    (word.length > 1 && /\p{Letter}/u.test(word) && word === word.toUpperCase())
+  )
+}
+
+function lowercaseLatinContinuesAfterRtl(text: string) {
+  const tokens = text.split(/\s+/u)
+  const firstRtl = tokens.findIndex(token => RTL_STRONG_RE.test(token))
+
+  for (const token of tokens.slice(firstRtl + 1)) {
+    const first = token.charAt(0)
+
+    if (LETTER_RE.test(first)) {
+      return LOWERCASE_LETTER_RE.test(first)
+    }
+  }
+
+  return false
+}
+
 function startsWithLatinLabelThenRtl(text: string) {
   let remainder = text.trimStart()
-  const startsUppercase = UPPERCASE_LETTER_RE.test(remainder)
 
   for (let i = 0; i < 8; i += 1) {
     const token = remainder.match(LEADING_LATIN_LABEL_TOKEN_RE)?.[0]
@@ -112,7 +138,21 @@ function startsWithLatinLabelThenRtl(text: string) {
     if (firstStrongDirection(remainder) === 'rtl') {
       const rtlWordCount = remainder.split(/\s+/u).filter(token => RTL_STRONG_RE.test(token)).length
 
-      return startsUppercase || i === 0 || rtlWordCount > 1
+      if (rtlWordCount > 1) {
+        return true
+      }
+
+      // A single RTL word only flips the line when it is a label tail
+      // ("Learning terminal existing: NOOP مايتحولش.") or sits in brand
+      // position ("Google عندها Gemini 3.5"). Lowercase English continuing
+      // past the word marks a quotation inside an English sentence
+      // ("explain what مرحبا means?"); casing alone decides nothing, because
+      // every English sentence starts with a capital letter.
+      if (lowercaseLatinContinuesAfterRtl(remainder)) {
+        return false
+      }
+
+      return isLabelShapedToken(token) || i === 0
     }
   }
 
