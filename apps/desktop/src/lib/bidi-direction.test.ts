@@ -49,6 +49,9 @@ describe('resolveTextDirection', () => {
     expect(resolveTextDirection('Is مرحبا the right word for hello?')).toBe('ltr')
     expect(resolveTextDirection('Add a test for the مرحبا case')).toBe('ltr')
     expect(resolveTextDirection('Run tests الأول')).toBe('ltr')
+    // Casing must not decide: the lowercased controls stay LTR as well.
+    expect(resolveTextDirection('can you explain what مرحبا means?')).toBe('ltr')
+    expect(resolveTextDirection('the error message says مرحبا in the log')).toBe('ltr')
   })
 
   it('keeps leading neutral punctuation outside an English-brand Arabic sentence', () => {
