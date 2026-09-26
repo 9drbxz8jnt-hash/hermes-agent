@@ -54,6 +54,18 @@ describe('resolveTextDirection', () => {
     expect(resolveTextDirection('the error message says مرحبا in the log')).toBe('ltr')
   })
 
+  it('keeps a bare English lead with a trailing Arabic word LTR', () => {
+    expect(resolveTextDirection('Try مرحبا')).toBe('ltr')
+    expect(resolveTextDirection('Say مرحبا')).toBe('ltr')
+    expect(resolveTextDirection('Send مرحبا!')).toBe('ltr')
+    expect(resolveTextDirection('Try مرحبا?')).toBe('ltr')
+    expect(resolveTextDirection('Use مرحبا')).toBe('ltr')
+    expect(resolveTextDirection('Thanks مرحبا')).toBe('ltr')
+    expect(resolveTextDirection('The مرحبا.')).toBe('ltr')
+    expect(resolveTextDirection('Try مرحبا in the app')).toBe('ltr')
+    expect(resolveTextDirection('Google عندها Gemini 3.5')).toBe('rtl')
+  })
+
   it('keeps leading neutral punctuation outside an English-brand Arabic sentence', () => {
     expect(resolveTextDirection('• Google عندها Gemini 3.5')).toBe('rtl')
     expect(resolveTextDirection('— OpenAI لسه مكملة بـ GPT-5.6')).toBe('rtl')

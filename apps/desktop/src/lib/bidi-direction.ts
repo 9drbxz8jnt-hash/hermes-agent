@@ -123,48 +123,74 @@ function lowercaseLatinContinuesAfterRtl(text: string) {
   return false
 }
 
-function startsWithLatinLabelThenRtl(text: string) {
+// Does Latin content (a letter or number) follow the line's first RTL word?
+// A trailing Arabic word is a quotation, never a brand tail.
+function latinFollowsRtlWord(text: string) {
+  const tokens = text.split(/\s+/u)
+  const firstRtl = tokens.findIndex(token => RTL_STRONG_RE.test(token))
+
+  return tokens
+    .slice(firstRtl + 1)
+    .some(token => /[\p{Letter}\p{Number}]/u.test(token.charAt(0)))
+}
+
+// Direction concluded from a leading Latin label/prefix, or null when the
+// input has no RTL content reachable that way (caller falls through to the
+// dominant script).
+function leadingLabelDirection(text: string): TextDirection | null {
   let remainder = text.trimStart()
 
   for (let i = 0; i < 8; i += 1) {
     const token = remainder.match(LEADING_LATIN_LABEL_TOKEN_RE)?.[0]
 
     if (!token) {
-      return false
+      return null
     }
 
     remainder = remainder.slice(token.length)
 
-    if (firstStrongDirection(remainder) === 'rtl') {
-      const rtlWordCount = remainder.split(/\s+/u).filter(token => RTL_STRONG_RE.test(token)).length
-
-      if (rtlWordCount > 1) {
-        return true
-      }
-
-      // A single RTL word only flips the line when it is a label tail
-      // ("Learning terminal existing: NOOP مايتحولش.") or sits in brand
-      // position ("Google عندها Gemini 3.5"). Lowercase English continuing
-      // past the word marks a quotation inside an English sentence
-      // ("explain what مرحبا means?"); casing alone decides nothing, because
-      // every English sentence starts with a capital letter.
-      if (lowercaseLatinContinuesAfterRtl(remainder)) {
-        return false
-      }
-
-      return isLabelShapedToken(token) || i === 0
+    if (firstStrongDirection(remainder) !== 'rtl') {
+      continue
     }
+
+    const rtlWordCount = remainder.split(/\s+/u).filter(token => RTL_STRONG_RE.test(token)).length
+
+    if (rtlWordCount > 1) {
+      return 'rtl'
+    }
+
+    // One RTL word. An English sentence that merely quotes one Arabic word
+    // stays LTR — lowercase prose continuing past the word ("explain what
+    // مرحبا means?") or a trailing word after a bare lead ("Try مرحبا").
+    // Only a label-shaped token ("Learning terminal existing: NOOP
+    // مايتحولش.") or brand position in a mixed line ("Google عندها Gemini
+    // 3.5", Latin on both sides) flips the line.
+    if (lowercaseLatinContinuesAfterRtl(remainder)) {
+      return 'ltr'
+    }
+
+    if (isLabelShapedToken(token)) {
+      return 'rtl'
+    }
+
+    return i === 0 && latinFollowsRtlWord(remainder) ? 'rtl' : 'ltr'
   }
 
-  return false
+  return null
 }
 
 export function resolveTextDirection(text: string, fallback: TextDirection = 'ltr'): TextDirection {
   const afterSpecialStart = stripLeadingDirectionalTokens(text)
   const afterSpecialDirection = firstStrongDirection(afterSpecialStart)
 
-  if (afterSpecialDirection === 'rtl' || startsWithLatinLabelThenRtl(afterSpecialStart)) {
+  if (afterSpecialDirection === 'rtl') {
     return 'rtl'
+  }
+
+  const leadingDirection = leadingLabelDirection(afterSpecialStart)
+
+  if (leadingDirection !== null) {
+    return leadingDirection
   }
 
   return dominantStrongDirection(text) ?? afterSpecialDirection ?? firstStrongDirection(text) ?? fallback
